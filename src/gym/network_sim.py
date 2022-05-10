@@ -108,7 +108,8 @@ class Network():
         for sender in self.senders:
             sender.register_network(self)
             sender.reset_obs()
-            heapq.heappush(self.q, (1.0 / sender.rate, sender, EVENT_TYPE_SEND, 0, 0.0, False)) 
+            heapq.heappush(self.q, (1.0 / sender.rate, sender, EVENT_TYPE_SEND, 0, 0.0, False, None, None, None)) 
+                                    # event_time, sender, event_type, next_hop, cur_latency, dropped, packet_delivered, packet_delivered_time, packet_app_limited
 
     def reset(self):
         self.cur_time = 0.0
@@ -126,7 +127,7 @@ class Network():
             sender.reset_obs()
 
         while self.cur_time < end_time:
-            event_time, sender, event_type, next_hop, cur_latency, dropped = heapq.heappop(self.q)
+            event_time, sender, event_type, next_hop, cur_latency, dropped, packet_delivered, packet_delivered_time, packet_app_limited = heapq.heappop(self.q)
             #print("Got event %s, to link %d, latency %f at time %f" % (event_type, next_hop, cur_latency, event_time))
             self.cur_time = event_time
             new_event_time = event_time
@@ -142,7 +143,10 @@ class Network():
                         sender.on_packet_lost()
                         #print("Packet lost at time %f" % self.cur_time)
                     else:
-                        sender.on_packet_acked(cur_latency)
+                        if isinstance(sender, BBRSender):
+                            sender.on_packet_acked(cur_latency, packet_delivered, packet_delivered_time, packet_app_limited)
+                        else:
+                            sender.on_packet_acked(cur_latency)
                         #print("Packet acked at time %f" % self.cur_time)
                 else:
                     new_next_hop = next_hop + 1
@@ -156,9 +160,10 @@ class Network():
                 if next_hop == 0:
                     #print("Packet sent at time %f" % self.cur_time)
                     if sender.can_send_packet():
-                        sender.on_packet_sent()
+                        # if self.get_cur_time() > 
+                        packet_delivered, packet_delivered_time, packet_app_limited = sender.on_packet_sent()
                         push_new_event = True
-                    heapq.heappush(self.q, (self.cur_time + (1.0 / sender.rate), sender, EVENT_TYPE_SEND, 0, 0.0, False))
+                    heapq.heappush(self.q, (self.cur_time + (1.0 / sender.rate), sender, EVENT_TYPE_SEND, 0, 0.0, False, None, None, None))
                 
                 else:
                     push_new_event = True
@@ -175,7 +180,7 @@ class Network():
                 new_dropped = not sender.path[next_hop].packet_enters_link(self.cur_time)
                    
             if push_new_event:
-                heapq.heappush(self.q, (new_event_time, sender, new_event_type, new_next_hop, new_latency, new_dropped))
+                heapq.heappush(self.q, (new_event_time, sender, new_event_type, new_next_hop, new_latency, new_dropped, packet_delivered, packet_delivered_time, packet_app_limited))
 
         sender_mi = self.senders[0].get_run_data()
         throughput = sender_mi.get("recv rate")
@@ -260,6 +265,7 @@ class Sender():
     def on_packet_sent(self):
         self.sent += 1
         self.bytes_in_flight += BYTES_PER_PACKET
+        return None, None, None
 
     def on_packet_acked(self, rtt):
         self.acked += 1
@@ -340,6 +346,52 @@ class Sender():
         self.reset_obs()
         self.history = sender_obs.SenderHistory(self.history_len,
                                                 self.features, self.id)
+
+class BBRSender(Sender):
+
+    def __init__(self, rate, path, dest, features, cwnd=25, history_len=10):
+        super().__init__(rate, path, dest, features, cwnd, history_len)
+        self.BtlBw = None
+        # TODO: set parameters
+        self.pacing_rate = 0
+        self.cwnd_gain = 1
+        self.delivered = 0
+        self.delivered_time = None
+        self.app_limited_until = 0
+
+    def can_send_packet(self):
+        if USE_CWND:
+            bdp = self.BtlBw * self.min_latency
+            return int(self.bytes_in_flight) < self.cwnd_gain * bdp
+        else:
+            return True
+
+    def on_packet_acked(self, rtt, packet_delivered, packet_delivered_time, packet_app_limited):
+        self.acked += 1
+        self.rtt_samples.append(rtt)
+        if (self.min_latency is None) or (rtt < self.min_latency):
+            self.min_latency = rtt
+        self.delivered += BYTES_PER_PACKET
+        self.delivered_time = self.net.get_cur_time()
+        deliveryRate = (self.delivered - packet_delivered) / (self.net.get_cur_time() - packet_delivered_time)
+        if deliveryRate > self.BtlBw or not packet_app_limited:
+            self.BtlBw = deliveryRate
+        if self.app_limited_until > 0:
+            self.app_limited_until -= BYTES_PER_PACKET
+
+        self.bytes_in_flight -= BYTES_PER_PACKET
+
+    def on_packet_sent(self):
+        if self.net.get_cur_time() > self.nextSendTime:
+            self.app_limited_until = self.bytes_in_flight
+        packet_app_limited = (self.app_limited_until > 0)
+        packet_delivered = self.delivered
+        packet_delivered_time = self.delivered_time
+        self.nextSendTime = self.net.get_cur_time() + BYTES_PER_PACKET/(self.pacing_rate * self.BtlBw)
+        self.set_rate(1/(self.nextSendTime - self.net.get_cur_time()))
+        self.sent += 1
+        self.bytes_in_flight += BYTES_PER_PACKET
+        return packet_delivered, packet_delivered_time, packet_app_limited
 
 class SimulatedNetworkEnv(gym.Env):
     
@@ -463,7 +515,7 @@ class SimulatedNetworkEnv(gym.Env):
         self.links = [Link(bw, lat, queue, loss), Link(bw, lat, queue, loss)]
         #self.senders = [Sender(0.3 * bw, [self.links[0], self.links[1]], 0, self.history_len)]
         #self.senders = [Sender(random.uniform(0.2, 0.7) * bw, [self.links[0], self.links[1]], 0, self.history_len)]
-        self.senders = [Sender(random.uniform(0.3, 1.5) * bw, [self.links[0], self.links[1]], 0, self.features, history_len=self.history_len)]
+        self.senders = [Sender(random.uniform(0.3, 1.5) * bw, [self.links[0], self.links[1]], 0, self.features, history_len=self.history_len), BBRSender(random.uniform(0.3, 1.5) * bw, [self.links[0], self.links[1]], 0, self.features, history_len=self.history_len)]
         self.run_dur = 3 * lat
 
     def reset(self):
