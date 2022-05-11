@@ -372,6 +372,7 @@ class SimulatedNetworkEnv(gym.Env):
         self.debug_thpt_changes = False
         self.last_thpt = None
         self.last_rate = None
+        self.num_senders = 1
 
         if USE_CWND:
             self.action_space = spaces.Box(np.array([-1e12, -1e12]), np.array([1e12, 1e12]), dtype=np.float32)
@@ -398,10 +399,17 @@ class SimulatedNetworkEnv(gym.Env):
         return [seed]
 
     def _get_all_sender_obs(self):
-        sender_obs = self.senders[0].get_obs()
-        sender_obs = np.array(sender_obs).reshape(-1,)
+        '''
+        Instead of only returning the observations for senders[0], return a list that contains the observations of ALL senders.
+        '''
+        sender_obs_list = []
+        for sender in senders:
+            sender_obs_list.append(sender.get_obs().reshape(-1,))
+        # sender_obs = self.senders[0].get_obs()
+        # sender_obs = np.array(sender_obs).reshape(-1,)
         #print(sender_obs)
-        return sender_obs
+        # return sender_obs
+        return sender_obs_list
 
     def step(self, actions):
         #print("Actions: %s" % str(actions))
@@ -463,7 +471,7 @@ class SimulatedNetworkEnv(gym.Env):
         self.links = [Link(bw, lat, queue, loss), Link(bw, lat, queue, loss)]
         #self.senders = [Sender(0.3 * bw, [self.links[0], self.links[1]], 0, self.history_len)]
         #self.senders = [Sender(random.uniform(0.2, 0.7) * bw, [self.links[0], self.links[1]], 0, self.history_len)]
-        self.senders = [Sender(random.uniform(0.3, 1.5) * bw, [self.links[0], self.links[1]], 0, self.features, history_len=self.history_len)]
+        self.senders = [Sender(random.uniform(0.3, 1.5) * bw, [self.links[0], self.links[1]], 0, self.features, history_len=self.history_len) for i in range(self.num_senders)]
         self.run_dur = 3 * lat
 
     def reset(self):

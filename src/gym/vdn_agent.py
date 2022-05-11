@@ -2,7 +2,7 @@ import numpy as np
 import random
 from collections import namedtuple, deque
 
-from model import QNetwork
+from vdn_model import QNetwork
 
 import torch
 import torch.nn.functional as F
@@ -33,27 +33,36 @@ class Agent():
         self.action_size = action_size
         self.seed = random.seed(seed)
 
-        # Q-Network
+        # Q-Networks of both RL agents.
         self.qnetwork_local = QNetwork(state_size, action_size, seed).to(device)
         self.qnetwork_target = QNetwork(state_size, action_size, seed).to(device)
+        self.qnetwork_local2 = QNetwork(state_size, action_size, seed).to(device)
+        self.qnetwork_target2 = QNetwork(state_size, action_size, seed).to(device)
         self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=LR)
 
-        # Replay memory
+        # Replay memory for both agents.
         self.memory = ReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE, seed)
+        self.memory2 = ReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE, seed)
         # Initialize time step (for updating every UPDATE_EVERY steps)
         self.t_step = 0
     
-    def step(self, state, action, reward, next_state, done):
+    def step(self, state, action, reward, next_state, done, agent_idx):
         # Save experience in replay memory
+        # The state is same for both agents
+        # First half of the action tensor belongs to the first agent
+        # Second half of the action belongs to the second agent
+        # TODO: split action tensor correctly!
         self.memory.add(state, action, reward, next_state, done)
+        self.memory2.add(state, action, reward, next_state, done)
         
         # Learn every UPDATE_EVERY time steps.
         self.t_step = (self.t_step + 1) % UPDATE_EVERY
         if self.t_step == 0:
             # If enough samples are available in memory, get random subset and learn
             if len(self.memory) > BATCH_SIZE:
-                experiences = self.memory.sample()
-                self.learn(experiences, GAMMA)
+                experiences1 = self.memory.sample()
+                experiences2 = self.memory2.sample()
+                self.learn(experiences1, experiences2, GAMMA)
 
     def act(self, state, eps=0.):
         """Returns actions for given state as per current policy.
@@ -75,7 +84,7 @@ class Agent():
         else:
             return random.choice(np.arange(self.action_size))
 
-    def learn(self, experiences, gamma):
+    def learn(self, experiences, experiences2, gamma):
         """Update value parameters using given batch of experience tuples.
         Params
         ======
