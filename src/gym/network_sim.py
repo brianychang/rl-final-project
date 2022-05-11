@@ -24,6 +24,7 @@ import json
 import os
 import sys
 import inspect
+import pickle
 currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
 parentdir = os.path.dirname(currentdir)
 sys.path.insert(0,parentdir) 
@@ -52,6 +53,25 @@ USE_LATENCY_NOISE = False
 MAX_LATENCY_NOISE = 1.1
 
 USE_CWND = False
+
+class Packet():
+
+    def __init__(self, event_time, sender, event_type, next_hop, cur_latency, dropped, packet_delivered, packet_delivered_time, packet_app_limited):
+        self.event_time = event_time
+        self.sender = sender
+        self.event_type = event_type
+        self.next_hop = next_hop
+        self.cur_latency = cur_latency
+        self.dropped = dropped
+        self.packet_delivered = packet_delivered
+        self.packet_delivered_time = packet_delivered_time
+        self.packet_app_limited = packet_app_limited
+
+    def __lt__(self, other):
+        return self.event_time < other.event_time
+
+    def getInfo(self):
+        return self.event_time, self.sender, self.event_type, self.next_hop, self.cur_latency, self.dropped, self.packet_delivered, self.packet_delivered_time, self.packet_app_limited
 
 class Link():
 
@@ -108,7 +128,7 @@ class Network():
         for sender in self.senders:
             sender.register_network(self)
             sender.reset_obs()
-            heapq.heappush(self.q, (1.0 / sender.rate, sender, EVENT_TYPE_SEND, 0, 0.0, False, None, None, None)) 
+            heapq.heappush(self.q, Packet(1.0 / sender.rate, sender, EVENT_TYPE_SEND, 0, 0.0, False, None, None, None)) 
                                     # event_time, sender, event_type, next_hop, cur_latency, dropped, packet_delivered, packet_delivered_time, packet_app_limited
 
     def reset(self):
@@ -122,12 +142,17 @@ class Network():
         return self.cur_time
 
     def run_for_dur(self, dur):
+        amount_inflights_bbr = []
+        amount_inflights_rl = []
+
         end_time = self.cur_time + dur
         for sender in self.senders:
             sender.reset_obs()
 
         while self.cur_time < end_time:
-            event_time, sender, event_type, next_hop, cur_latency, dropped, packet_delivered, packet_delivered_time, packet_app_limited = heapq.heappop(self.q)
+            event_time, sender, event_type, next_hop, cur_latency, dropped, packet_delivered, packet_delivered_time, packet_app_limited = heapq.heappop(self.q).getInfo()
+            amount_inflights_rl.append(self.senders[0].bytes_in_flight)
+            amount_inflights_bbr.append(self.senders[1].bytes_in_flight)
             #print("Got event %s, to link %d, latency %f at time %f" % (event_type, next_hop, cur_latency, event_time))
             self.cur_time = event_time
             new_event_time = event_time
@@ -163,7 +188,7 @@ class Network():
                         # if self.get_cur_time() > 
                         packet_delivered, packet_delivered_time, packet_app_limited = sender.on_packet_sent()
                         push_new_event = True
-                    heapq.heappush(self.q, (self.cur_time + (1.0 / sender.rate), sender, EVENT_TYPE_SEND, 0, 0.0, False, None, None, None))
+                    heapq.heappush(self.q, Packet(self.cur_time + (1.0 / sender.rate), sender, EVENT_TYPE_SEND, 0, 0.0, False, None, None, None))
                 
                 else:
                     push_new_event = True
@@ -180,12 +205,20 @@ class Network():
                 new_dropped = not sender.path[next_hop].packet_enters_link(self.cur_time)
                    
             if push_new_event:
-                heapq.heappush(self.q, (new_event_time, sender, new_event_type, new_next_hop, new_latency, new_dropped, packet_delivered, packet_delivered_time, packet_app_limited))
+                heapq.heappush(self.q, Packet(new_event_time, sender, new_event_type, new_next_hop, new_latency, new_dropped, packet_delivered, packet_delivered_time, packet_app_limited))
 
-        sender_mi = self.senders[0].get_run_data()
-        throughput = sender_mi.get("recv rate")
-        latency = sender_mi.get("avg latency")
-        loss = sender_mi.get("loss ratio")
+        for i in [1, 0]:
+            sender_mi = self.senders[i].get_run_data()
+            throughput = sender_mi.get("recv rate")
+            latency = sender_mi.get("avg latency")
+            loss = sender_mi.get("loss ratio")
+            print("For sender {}, Throughput: {}, Latency: {}, Loss: {}".format(i, throughput, latency, loss))
+            pickle.dump(self.senders[i].sample_time, open('output/sender'+str(i)+'-sampletimes', 'wb'))
+            pickle.dump(self.senders[i].rtt_samples, open('output/sender'+str(i)+'-rttsamples', 'wb'))
+            # print("Sample times: ")
+            # print(self.senders[i].sample_time)
+            # print("rtt samples: ")
+            # print(self.senders[i].rtt_samples)
         bw_cutoff = self.links[0].bw * 0.8
         lat_cutoff = 2.0 * self.links[0].dl * 1.5
         loss_cutoff = 2.0 * self.links[0].lr * 1.5
@@ -269,6 +302,7 @@ class Sender():
 
     def on_packet_acked(self, rtt):
         self.acked += 1
+        self.sample_time.append(self.net.get_cur_time())
         self.rtt_samples.append(rtt)
         if (self.min_latency is None) or (rtt < self.min_latency):
             self.min_latency = rtt
@@ -327,6 +361,7 @@ class Sender():
         self.acked = 0
         self.lost = 0
         self.rtt_samples = []
+        self.sample_time = []
         self.obs_start_time = self.net.get_cur_time()
 
     def print_debug(self):
@@ -351,13 +386,14 @@ class BBRSender(Sender):
 
     def __init__(self, rate, path, dest, features, cwnd=25, history_len=10):
         super().__init__(rate, path, dest, features, cwnd, history_len)
-        self.BtlBw = None
+        self.BtlBw = 1
         # TODO: set parameters
-        self.pacing_rate = 0
-        self.cwnd_gain = 1
+        self.pacing_rate = 1.1
+        self.cwnd_gain = 1.1
         self.delivered = 0
-        self.delivered_time = None
+        self.delivered_time = 0
         self.app_limited_until = 0
+        self.nextSendTime = 1/self.rate
 
     def can_send_packet(self):
         if USE_CWND:
@@ -369,6 +405,7 @@ class BBRSender(Sender):
     def on_packet_acked(self, rtt, packet_delivered, packet_delivered_time, packet_app_limited):
         self.acked += 1
         self.rtt_samples.append(rtt)
+        self.sample_time.append(self.net.get_cur_time())
         if (self.min_latency is None) or (rtt < self.min_latency):
             self.min_latency = rtt
         self.delivered += BYTES_PER_PACKET
