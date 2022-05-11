@@ -38,7 +38,7 @@ def train_vdn():
         for t in range(max_timesteps_per_episode):
             action = agent.act(state, epsilon)
             next_state, reward, done, _ = env.step(action)
-            
+            agent.step(state, action, reward, next_state, done)
         
 
 

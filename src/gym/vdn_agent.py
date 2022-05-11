@@ -92,17 +92,28 @@ class Agent():
             gamma (float): discount factor
         """
         states, actions, rewards, next_states, dones = experiences
+        states2, actions2, rewards2, next_states2, dones2 = experiences2
 
         # Get max predicted Q values (for next states) from target model
         Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
-        # Compute Q targets for current states 
-        Q_targets = rewards + (gamma * Q_targets_next * (1 - dones))
+        Q_targets_next2 = self.qnetwork_target2(next_states2).detach().max(1)[0].unsqueeze(1)
+
+        # Mix the expected max Q values of the next state
+        Q_max_mixed = Q_targets_next + Q_targets_next2
+
+        # Compute 1-step Q learning targets.
+        all_done = 1 if (dones or dones2) else 0
+        Q_target_sum = (rewards + rewards2) + (gamma * Q_max_mixed * (1 - all_done))
 
         # Get expected Q values from local model
         Q_expected = self.qnetwork_local(states).gather(1, actions)
+        Q_expected2 = self.qnetwork_local2(states2).gather(1, actions2)
+
+        # "Mix" (i.e. add) the chosen Q values of each agent
+        Q_chosen_actions_mixed = Q_expected + Q_expected2
 
         # Compute loss
-        loss = F.mse_loss(Q_expected, Q_targets)
+        loss = F.mse_loss(Q_chosen_actions_mixed, Q_target_sum)
         # Minimize the loss
         self.optimizer.zero_grad()
         loss.backward()
@@ -110,6 +121,7 @@ class Agent():
 
         # ------------------- update target network ------------------- #
         self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)                     
+        self.soft_update(self.qnetwork_local2, self.qnetwork_target2, TAU)
 
     def soft_update(self, local_model, target_model, tau):
         """Soft update model parameters.
