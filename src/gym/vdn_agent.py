@@ -46,14 +46,14 @@ class Agent():
         # Initialize time step (for updating every UPDATE_EVERY steps)
         self.t_step = 0
     
-    def step(self, state, action, reward, next_state, done, agent_idx):
+    def step(self, state, action, reward, next_state, done):
         # Save experience in replay memory
         # The state is same for both agents
         # First half of the action tensor belongs to the first agent
         # Second half of the action belongs to the second agent
         # TODO: split action tensor correctly!
-        self.memory.add(state, action, reward, next_state, done)
-        self.memory2.add(state, action, reward, next_state, done)
+        self.memory.add(state[0], action[0], reward[0], next_state[0], done)
+        self.memory2.add(state[1], action[1], reward[1], next_state[1], done)
         
         # Learn every UPDATE_EVERY time steps.
         self.t_step = (self.t_step + 1) % UPDATE_EVERY
@@ -72,17 +72,25 @@ class Agent():
             state (array_like): current state
             eps (float): epsilon, for epsilon-greedy action selection
         """
-        state = torch.from_numpy(state).float().unsqueeze(0).to(device)
+        state[0] = torch.from_numpy(state[0]).float().unsqueeze(0).to(device)
+        state[1] = torch.from_numpy(state[1]).float().unsqueeze(0).to(device)
+        # Agent 0
         self.qnetwork_local.eval()
         with torch.no_grad():
-            action_values = self.qnetwork_local(state)
+            action_values = self.qnetwork_local(state[0])
         self.qnetwork_local.train()
+
+        # Agent 1
+        self.qnetwork_local2.eval()
+        with torch.no_grad():
+            action_values2 = self.qnetwork_local(state[1])
+        self.qnetwork_local2.train()
 
         # Epsilon-greedy action selection
         if random.random() > eps:
-            return np.argmax(action_values.cpu().data.numpy())
+            return np.argmax(action_values.cpu().data.numpy()), np.argmax(action_values2.cpu().data.numpy())
         else:
-            return random.choice(np.arange(self.action_size))
+            return random.choice(np.arange(self.action_size)), random.choice(np.arange(self.action_size))
 
     def learn(self, experiences, experiences2, gamma):
         """Update value parameters using given batch of experience tuples.
@@ -102,8 +110,8 @@ class Agent():
         Q_max_mixed = Q_targets_next + Q_targets_next2
 
         # Compute 1-step Q learning targets.
-        all_done = 1 if (dones or dones2) else 0
-        Q_target_sum = (rewards + rewards2) + (gamma * Q_max_mixed * (1 - all_done))
+        all_done = dones.int() | dones2.int()
+        Q_target_sum = (rewards + rewards2) + (gamma * Q_max_mixed * (1 - all_done.float()))
 
         # Get expected Q values from local model
         Q_expected = self.qnetwork_local(states).gather(1, actions)

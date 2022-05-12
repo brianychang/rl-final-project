@@ -20,29 +20,35 @@ def train_vdn():
     # Agent.step()
     # All we need to do is add the two q values together.
     # Training parameters
-    num_episodes = 200
-    max_timesteps_per_episode = 500
+    num_episodes = 1000
     env = gym.make('PccNs-v0')
     gamma = 0.99
     epsilon = 1
     epsolon_decay = 0.995
     # 
     # TODO: get correct state and action sizes
-    state_size = 10
-    action_size = 10
+    state_size = 30
+    action_size = 11
     agent = Agent(state_size, action_size, seed=0)
 
-    state = env.reset()
+    # state = env.reset()
     for episode in range(num_episodes):
-        print("----------Episode %d----------" % (episode))
-        for t in range(max_timesteps_per_episode):
+        done = False
+        state = env.reset()
+        # print("----------Episode %d----------" % (episode))
+        while not done:
             action = agent.act(state, epsilon)
+            # action[0], action[1] are the actions of the 2 agents.
             next_state, reward, done, _ = env.step(action)
+            # print("rewardreward ", reward)
             agent.step(state, action, reward, next_state, done)
-        
+            state = next_state
 
+        # torch.save(agent.qnetwork_local.state_dict(), 'checkpoint_ep%d_agent1.pth'%(episode))
+        # torch.save(agent.qnetwork_local2.state_dict(), 'checkpoint_ep%d_agent2.pth'%(episode))
 
 
 
 if __name__ == "__main__":
+    print("=====================Main training loop=====================")
     train_vdn()
