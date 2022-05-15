@@ -458,14 +458,18 @@ class SimulatedNetworkEnv(gym.Env):
         self.steps_taken += 1
         sender_obs = self._get_all_sender_obs()
         sender_mi = self.senders[0].get_run_data()
+        sender_mi2 = self.senders[1].get_run_data()
         event = {}
         event["Name"] = "Step"
         event["Time"] = self.steps_taken
-        event["Reward"] = reward
+        event["Reward for Agent 0"] = reward[0]
+        event["Reward for Agent 1"] = reward[1]
         #event["Target Rate"] = sender_mi.target_rate
         event["Send Rate"] = sender_mi.get("send rate")
         event["Throughput"] = sender_mi.get("recv rate")
         event["Latency"] = sender_mi.get("avg latency")
+        event["Throughput2"] = sender_mi2.get("recv rate")
+        event["Latency2"] = sender_mi2.get("avg latency")
         event["Loss Rate"] = sender_mi.get("loss ratio")
         event["Latency Inflation"] = sender_mi.get("sent latency inflation")
         event["Latency Ratio"] = sender_mi.get("latency ratio")
@@ -502,7 +506,7 @@ class SimulatedNetworkEnv(gym.Env):
         self.links = [Link(bw, lat, queue, loss), Link(bw, lat, queue, loss)]
         #self.senders = [Sender(0.3 * bw, [self.links[0], self.links[1]], 0, self.history_len)]
         #self.senders = [Sender(random.uniform(0.2, 0.7) * bw, [self.links[0], self.links[1]], 0, self.history_len)]
-        self.senders = [Sender(random.uniform(0.3, 1.5) * bw, [self.links[0], self.links[1]], 0, self.features, history_len=self.history_len), Sender(random.uniform(0.5, 1.9) * bw, [self.links[0], self.links[1]], 0, self.features, history_len=self.history_len)]
+        self.senders = [Sender(1.5 * bw, [self.links[0], self.links[1]], 0, self.features, history_len=self.history_len), Sender(1.5 * bw, [self.links[0], self.links[1]], 0, self.features, history_len=self.history_len)]
         self.run_dur = 3 * lat
 
     def reset(self):
@@ -512,7 +516,7 @@ class SimulatedNetworkEnv(gym.Env):
         self.net = Network(self.senders, self.links)
         self.episodes_run += 1
         if self.episodes_run > 0 and self.episodes_run % 100 == 0:
-            self.dump_events_to_file("pcc_env_log_run_%d.json" % self.episodes_run)
+            self.dump_events_to_file("pcc_env_log_run_%d_run6.json" % self.episodes_run)
         self.event_record = {"Events":[]}
         self.net.run_for_dur(self.run_dur)
         self.net.run_for_dur(self.run_dur)
@@ -521,8 +525,8 @@ class SimulatedNetworkEnv(gym.Env):
         # print("self.reward_sum: ", self.reward_sum)
         # print("self.reward_ewma: ", self.reward_ewma)
         print("------------------------------------------------------------")
-        print("Agent 0 Reward: %0.2f, Agent 0 Ewma Reward: %0.2f" % (self.reward_sum[0], self.reward_ewma[0]))
-        print("Agent 1 Reward: %0.2f, Agent 1 Ewma Reward: %0.2f" % (self.reward_sum[1], self.reward_ewma[1]))
+        print("Agent 0 Reward:%0.2f, Agent 0 Ewma Reward:%0.2f" % (self.reward_sum[0], self.reward_ewma[0]))
+        print("Agent 1 Reward:%0.2f, Agent 1 Ewma Reward:%0.2f" % (self.reward_sum[1], self.reward_ewma[1]))
         print("------------------------------------------------------------")
         self.reward_sum = np.asarray([0.0, 0.0])
         return self._get_all_sender_obs()
