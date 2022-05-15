@@ -1,3 +1,6 @@
+# CS 394 RL Final Project
+Our project is highly based on the PCC-RL repo described below.
+Please see the **bbr** branch for our code on fairness experiments, and the **vdn** branch for our code on multi-agent RL congestion control.
 # PCC-RL
 Reinforcement learning resources for the Performance-oriented Congestion Control
 project.
