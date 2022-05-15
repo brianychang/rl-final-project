@@ -1,3 +1,7 @@
+# How to run the multi-agent experiment:
+
+Please run *python3 src/gym/run_vdn.py* to train the network. The .json files generated contain the throughput and latency numbers that were used to plot the figures in the report.
+
 # PCC-RL
 Reinforcement learning resources for the Performance-oriented Congestion Control
 project.
