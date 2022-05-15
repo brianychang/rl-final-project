@@ -1,3 +1,7 @@
+# CS 394 RL Final Project - Fairness Part
+
+This branch is for the fairness experiments with a single Aurora agent and a BBR agent. To run the experiments, directly run the stable\_solve.py under ./src/gym/.
+
 # PCC-RL
 Reinforcement learning resources for the Performance-oriented Congestion Control
 project.

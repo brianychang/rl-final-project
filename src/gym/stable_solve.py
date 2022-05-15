@@ -55,7 +55,7 @@ for i in range(0, 6):
     with model.graph.as_default():                                                                   
         saver = tf.train.Saver()                                                                     
         saver.save(training_sess, "./pcc_model_%d.ckpt" % i)
-    model.learn(total_timesteps=(1600 * 410))
+    model.learn(total_timesteps=(3200 * 410))
 
 ##
 #   Save the model to the location specified below.

@@ -54,6 +54,9 @@ MAX_LATENCY_NOISE = 1.1
 
 USE_CWND = False
 
+RATE_OBS_SCALE = 0.001
+LAT_OBS_SCALE = 0.1
+
 class Packet():
 
     def __init__(self, event_time, sender, event_type, next_hop, cur_latency, dropped, packet_delivered, packet_delivered_time, packet_app_limited):
@@ -212,9 +215,9 @@ class Network():
             throughput = sender_mi.get("recv rate")
             latency = sender_mi.get("avg latency")
             loss = sender_mi.get("loss ratio")
-            print("For sender {}, Throughput: {}, Latency: {}, Loss: {}".format(i, throughput, latency, loss))
-            pickle.dump(self.senders[i].sample_time, open('output/sender'+str(i)+'-sampletimes', 'wb'))
-            pickle.dump(self.senders[i].rtt_samples, open('output/sender'+str(i)+'-rttsamples', 'wb'))
+            # print("For sender {}, Throughput: {}, Latency: {}, Loss: {}".format(i, throughput, latency, loss))
+            pickle.dump(self.senders[i].sample_time, open('multiagent/sender'+str(i)+'-sampletimes', 'wb'))
+            pickle.dump(self.senders[i].rtt_samples, open('multiagent/sender'+str(i)+'-rttsamples', 'wb'))
             # print("Sample times: ")
             # print(self.senders[i].sample_time)
             # print("rtt samples: ")
@@ -226,7 +229,7 @@ class Network():
         #reward = 0 if (loss > 0.1 or throughput < bw_cutoff or latency > lat_cutoff or loss > loss_cutoff) else 1 #
         
         # Super high throughput
-        #reward = REWARD_SCALE * (20.0 * throughput / RATE_OBS_SCALE - 1e3 * latency / LAT_OBS_SCALE - 2e3 * loss)
+        # reward = REWARD_SCALE * (20.0 * throughput / RATE_OBS_SCALE - 1e3 * latency / LAT_OBS_SCALE - 2e3 * loss)
         
         # Very high thpt
         reward = (10.0 * throughput / (8 * BYTES_PER_PACKET) - 1e3 * latency - 2e3 * loss)
@@ -240,7 +243,7 @@ class Network():
         #print("Reward = %f, thpt = %f, lat = %f, loss = %f" % (reward, throughput, latency, loss))
         
         #reward = (throughput / RATE_OBS_SCALE) * np.exp(-1 * (LATENCY_PENALTY * latency / LAT_OBS_SCALE + LOSS_PENALTY * loss))
-        return reward * REWARD_SCALE
+        return reward * REWARD_SCALE, self.senders[0].sample_time, self.senders[0].rtt_samples, self.senders[1].sample_time, self.senders[1].rtt_samples
 
 class Sender():
     
@@ -482,6 +485,13 @@ class SimulatedNetworkEnv(gym.Env):
         self.event_record = {"Events":[]}
         self.episodes_run = -1
 
+        self.tot_sender0_rtt_samples = []
+        self.tot_sender0_sample_time = []
+        self.tot_sender1_rtt_samples = []
+        self.tot_sender1_sample_time = []
+        self.tot_sender0_throughput = []
+        self.tot_sender1_throughput = []
+
     def seed(self, seed=None):
         self.rand, seed = seeding.np_random(seed)
         return [seed]
@@ -502,20 +512,27 @@ class SimulatedNetworkEnv(gym.Env):
             if USE_CWND:
                 self.senders[i].apply_cwnd_delta(action[1])
         #print("Running for %fs" % self.run_dur)
-        reward = self.net.run_for_dur(self.run_dur)
+        reward, sender0_sample_time, sender0_rtt_samples, sender1_sample_time, sender1_rtt_samples = self.net.run_for_dur(self.run_dur)
+        self.tot_sender0_sample_time.extend(sender0_sample_time)
+        self.tot_sender0_rtt_samples.extend(sender0_rtt_samples)
+        self.tot_sender1_sample_time.extend(sender1_sample_time)
+        self.tot_sender1_rtt_samples.extend(sender1_rtt_samples)
         for sender in self.senders:
             sender.record_run()
         self.steps_taken += 1
         sender_obs = self._get_all_sender_obs()
         sender_mi = self.senders[0].get_run_data()
+        sender_mi_bbr = self.senders[1].get_run_data()
         event = {}
         event["Name"] = "Step"
         event["Time"] = self.steps_taken
         event["Reward"] = reward
         #event["Target Rate"] = sender_mi.target_rate
         event["Send Rate"] = sender_mi.get("send rate")
-        event["Throughput"] = sender_mi.get("recv rate")
-        event["Latency"] = sender_mi.get("avg latency")
+        event["RL Sender Throughput"] = sender_mi.get("recv rate")
+        event["BBR Sender Throughput"] = sender_mi_bbr.get("recv rate")
+        event["RL Sender Latency"] = sender_mi.get("avg latency")
+        event["BBR Sender Latency"] = sender_mi_bbr.get("avg latency")
         event["Loss Rate"] = sender_mi.get("loss ratio")
         event["Latency Inflation"] = sender_mi.get("sent latency inflation")
         event["Latency Ratio"] = sender_mi.get("latency ratio")
@@ -523,7 +540,7 @@ class SimulatedNetworkEnv(gym.Env):
         #event["Cwnd"] = sender_mi.cwnd
         #event["Cwnd Used"] = sender_mi.cwnd_used
         self.event_record["Events"].append(event)
-        if event["Latency"] > 0.0:
+        if event["RL Sender Latency"] > 0.0:
             self.run_dur = 0.5 * sender_mi.get("avg latency")
         #print("Sender obs: %s" % sender_obs)
 
@@ -561,8 +578,18 @@ class SimulatedNetworkEnv(gym.Env):
         self.create_new_links_and_senders()
         self.net = Network(self.senders, self.links)
         self.episodes_run += 1
-        if self.episodes_run > 0 and self.episodes_run % 100 == 0:
+        if self.episodes_run > 0 and self.episodes_run % 1000 == 0:
             self.dump_events_to_file("pcc_env_log_run_%d.json" % self.episodes_run)
+            pickle.dump(self.tot_sender0_sample_time, open('multiagent/tot_sender0_sample_time_'+str(self.episodes_run), 'wb'))
+            pickle.dump(self.tot_sender0_rtt_samples, open('multiagent/tot_sender0_rtt_samples_'+str(self.episodes_run), 'wb'))
+            pickle.dump(self.tot_sender1_sample_time, open('multiagent/tot_sender1_sample_time_'+str(self.episodes_run), 'wb'))
+            pickle.dump(self.tot_sender1_rtt_samples, open('multiagent/tot_sender1_rtt_samples_'+str(self.episodes_run), 'wb'))
+            # pickle.dump(self.net.tot_sender0_throughput, open('multiagent/tot_sender0_throughput_'+str(self.episodes_run), 'wb'))
+            # pickle.dump(self.net.tot_sender1_throughput, open('multiagent/tot_sender1_throughput_'+str(self.episodes_run), 'wb'))
+        self.tot_sender0_sample_time.clear()
+        self.tot_sender0_rtt_samples.clear()
+        self.tot_sender1_sample_time.clear()
+        self.tot_sender1_rtt_samples.clear()
         self.event_record = {"Events":[]}
         self.net.run_for_dur(self.run_dur)
         self.net.run_for_dur(self.run_dur)
